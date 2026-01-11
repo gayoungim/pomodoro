@@ -1,0 +1,507 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🍅 뽀모도로 타이머</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { margin: 0; padding: 0; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+    
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+        
+        function PomodoroApp() {
+          const [minutes, setMinutes] = useState(25);
+          const [seconds, setSeconds] = useState(0);
+          const [isActive, setIsActive] = useState(false);
+          const [mode, setMode] = useState('work');
+          const [pomodorosCompleted, setPomodorosCompleted] = useState(0);
+          const [todayPomodoros, setTodayPomodoros] = useState(0);
+          const [showSettings, setShowSettings] = useState(false);
+          const [showNotionSettings, setShowNotionSettings] = useState(false);
+          const [startTime, setStartTime] = useState(null);
+          
+          const [workDuration, setWorkDuration] = useState(25);
+          const [breakDuration, setBreakDuration] = useState(5);
+          const [longBreakDuration, setLongBreakDuration] = useState(15);
+          const [pomodorosUntilLongBreak, setPomodorosUntilLongBreak] = useState(4);
+          
+          const [notionToken, setNotionToken] = useState('');
+          const [notionPageId, setNotionPageId] = useState('');
+          const [notionConnected, setNotionConnected] = useState(false);
+
+          const audioRef = useRef(null);
+
+          // Load settings from localStorage
+          useEffect(() => {
+            const savedToken = localStorage.getItem('notionToken');
+            const savedPageId = localStorage.getItem('notionPageId');
+            if (savedToken && savedPageId) {
+              setNotionToken(savedToken);
+              setNotionPageId(savedPageId);
+              setNotionConnected(true);
+            }
+          }, []);
+
+          useEffect(() => {
+            let interval = null;
+            
+            if (isActive) {
+              interval = setInterval(() => {
+                if (seconds === 0) {
+                  if (minutes === 0) {
+                    handleTimerComplete();
+                  } else {
+                    setMinutes(minutes - 1);
+                    setSeconds(59);
+                  }
+                } else {
+                  setSeconds(seconds - 1);
+                }
+              }, 1000);
+            } else {
+              clearInterval(interval);
+            }
+            
+            return () => clearInterval(interval);
+          }, [isActive, minutes, seconds]);
+
+          const handleTimerComplete = () => {
+            setIsActive(false);
+            playSound();
+            
+            if (mode === 'work') {
+              const newCount = pomodorosCompleted + 1;
+              const endTime = new Date();
+              setPomodorosCompleted(newCount);
+              setTodayPomodoros(todayPomodoros + 1);
+              
+              if (notionConnected && startTime) {
+                sendToNotion(startTime, endTime, newCount);
+              }
+              
+              if (newCount % pomodorosUntilLongBreak === 0) {
+                setMode('longBreak');
+                setMinutes(longBreakDuration);
+              } else {
+                setMode('break');
+                setMinutes(breakDuration);
+              }
+            } else {
+              setMode('work');
+              setMinutes(workDuration);
+            }
+            setSeconds(0);
+            setStartTime(null);
+          };
+
+          const playSound = () => {
+            if (audioRef.current) {
+              audioRef.current.play();
+            }
+          };
+
+          const toggleTimer = () => {
+            if (!isActive && mode === 'work' && !startTime) {
+              setStartTime(new Date());
+            }
+            setIsActive(!isActive);
+          };
+
+          const resetTimer = () => {
+            setIsActive(false);
+            setSeconds(0);
+            setStartTime(null);
+            if (mode === 'work') {
+              setMinutes(workDuration);
+            } else if (mode === 'break') {
+              setMinutes(breakDuration);
+            } else {
+              setMinutes(longBreakDuration);
+            }
+          };
+
+          const switchMode = (newMode) => {
+            setIsActive(false);
+            setMode(newMode);
+            setSeconds(0);
+            setStartTime(null);
+            if (newMode === 'work') {
+              setMinutes(workDuration);
+            } else if (newMode === 'break') {
+              setMinutes(breakDuration);
+            } else {
+              setMinutes(longBreakDuration);
+            }
+          };
+
+          const formatTime24 = (date) => {
+            const hours = String(date.getHours()).padStart(2, '0');
+            const mins = String(date.getMinutes()).padStart(2, '0');
+            return `${hours}:${mins}`;
+          };
+
+          const sendToNotion = async (start, end, count) => {
+            if (!notionToken || !notionPageId) return;
+            
+            try {
+              const startTimeStr = formatTime24(start);
+              const endTimeStr = formatTime24(end);
+              const logMessage = `🍅 ${startTimeStr} ~ ${endTimeStr} | 뽀모도로 ${count} 완료`;
+              
+              const response = await fetch(`https://api.notion.com/v1/blocks/${notionPageId}/children`, {
+                method: 'PATCH',
+                headers: {
+                  'Authorization': `Bearer ${notionToken}`,
+                  'Content-Type': 'application/json',
+                  'Notion-Version': '2022-06-28'
+                },
+                body: JSON.stringify({
+                  children: [
+                    {
+                      object: 'block',
+                      type: 'paragraph',
+                      paragraph: {
+                        rich_text: [
+                          {
+                            type: 'text',
+                            text: {
+                              content: logMessage
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                })
+              });
+              
+              if (response.ok) {
+                console.log('✅ 노션에 기록됨:', logMessage);
+              } else {
+                const error = await response.json();
+                console.error('노션 API 오류:', error);
+                alert('노션 연동 실패: ' + (error.message || '권한을 확인해주세요'));
+              }
+            } catch (error) {
+              console.error('노션 연동 오류:', error);
+              alert('노션 연동 중 오류가 발생했습니다');
+            }
+          };
+
+          const saveSettings = () => {
+            setShowSettings(false);
+            if (mode === 'work') setMinutes(workDuration);
+            else if (mode === 'break') setMinutes(breakDuration);
+            else setMinutes(longBreakDuration);
+            setSeconds(0);
+            setIsActive(false);
+            setStartTime(null);
+          };
+
+          const saveNotionSettings = () => {
+            const connected = !!notionToken && !!notionPageId;
+            setNotionConnected(connected);
+            
+            if (connected) {
+              localStorage.setItem('notionToken', notionToken);
+              localStorage.setItem('notionPageId', notionPageId);
+            } else {
+              localStorage.removeItem('notionToken');
+              localStorage.removeItem('notionPageId');
+            }
+            
+            setShowNotionSettings(false);
+          };
+
+          const formatTime = (mins, secs) => {
+            return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+          };
+
+          return (
+            <div className="min-h-screen bg-gradient-to-br from-rose-50 to-orange-50 p-4 sm:p-8">
+              <audio ref={audioRef} src="data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBSuBzvLZiTcIGWi77eafTRAMUKfj8LZjHAY4ktfyzHksBSR3x/DdkEAKFF606+uoVRQKRp/g8r5sIQUrgc7y2Yk3CBlou+3mn00QDFCn4/C2YxwGOJLX8sx5LAUkd8fw3ZBACg==" />
+              
+              <div className="max-w-md mx-auto">
+                <div className="flex justify-between items-center mb-6">
+                  <h1 className="text-2xl sm:text-3xl font-bold text-gray-800">🍅 뽀모도로</h1>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setShowNotionSettings(true)}
+                      className={`p-2 rounded-lg ${notionConnected ? 'bg-green-100 text-green-600' : 'bg-gray-100 text-gray-600'} hover:bg-opacity-80 transition text-sm sm:text-base`}
+                      title="노션 연동"
+                    >
+                      {notionConnected ? '✓ 연동됨' : '노션'}
+                    </button>
+                    <button
+                      onClick={() => setShowSettings(true)}
+                      className="p-2 rounded-lg bg-gray-100 text-gray-600 hover:bg-gray-200 transition"
+                    >
+                      ⚙
+                    </button>
+                  </div>
+                </div>
+
+                <div className="flex gap-2 mb-4">
+                  <button
+                    onClick={() => switchMode('work')}
+                    className={`flex-1 py-2 px-2 sm:px-4 rounded-lg font-medium transition text-sm sm:text-base ${
+                      mode === 'work' ? 'bg-rose-500 text-white' : 'bg-white text-gray-600'
+                    }`}
+                  >
+                    집중
+                  </button>
+                  <button
+                    onClick={() => switchMode('break')}
+                    className={`flex-1 py-2 px-2 sm:px-4 rounded-lg font-medium transition text-sm sm:text-base ${
+                      mode === 'break' ? 'bg-green-500 text-white' : 'bg-white text-gray-600'
+                    }`}
+                  >
+                    휴식
+                  </button>
+                  <button
+                    onClick={() => switchMode('longBreak')}
+                    className={`flex-1 py-2 px-2 sm:px-4 rounded-lg font-medium transition text-sm sm:text-base ${
+                      mode === 'longBreak' ? 'bg-blue-500 text-white' : 'bg-white text-gray-600'
+                    }`}
+                  >
+                    긴 휴식
+                  </button>
+                </div>
+
+                <div className="bg-white rounded-3xl shadow-xl p-6 sm:p-12 mb-4">
+                  <div className="text-center">
+                    <div className="text-5xl sm:text-7xl font-bold text-gray-800 mb-6 sm:mb-8 font-mono">
+                      {formatTime(minutes, seconds)}
+                    </div>
+                    
+                    <div className="flex justify-center gap-3 sm:gap-4">
+                      <button
+                        onClick={toggleTimer}
+                        className={`p-3 sm:p-4 rounded-full ${
+                          mode === 'work' ? 'bg-rose-500' : mode === 'break' ? 'bg-green-500' : 'bg-blue-500'
+                        } text-white hover:opacity-90 transition shadow-lg text-xl sm:text-2xl`}
+                      >
+                        {isActive ? '❚❚' : '▶'}
+                      </button>
+                      <button
+                        onClick={resetTimer}
+                        className="p-3 sm:p-4 rounded-full bg-gray-200 text-gray-700 hover:bg-gray-300 transition text-xl sm:text-2xl"
+                      >
+                        ↻
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-white rounded-2xl shadow-lg p-4 sm:p-6">
+                  <div className="flex justify-around">
+                    <div className="text-center">
+                      <div className="text-2xl sm:text-3xl font-bold text-rose-500">{todayPomodoros}</div>
+                      <div className="text-xs sm:text-sm text-gray-600 mt-1">오늘 완료</div>
+                    </div>
+                    <div className="text-center">
+                      <div className="text-2xl sm:text-3xl font-bold text-orange-500">{pomodorosCompleted}</div>
+                      <div className="text-xs sm:text-sm text-gray-600 mt-1">총 완료</div>
+                    </div>
+                    <div className="text-center">
+                      <div className="text-2xl sm:text-3xl font-bold text-blue-500">
+                        {pomodorosCompleted % pomodorosUntilLongBreak}
+                      </div>
+                      <div className="text-xs sm:text-sm text-gray-600 mt-1">긴 휴식까지</div>
+                    </div>
+                  </div>
+                </div>
+
+                {showSettings && (
+                  <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+                    <div className="bg-white rounded-2xl p-6 max-w-sm w-full">
+                      <h2 className="text-2xl font-bold mb-4">설정</h2>
+                      
+                      <div className="space-y-4">
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">
+                            집중 시간 (분)
+                          </label>
+                          <input
+                            type="number"
+                            value={workDuration}
+                            onChange={(e) => setWorkDuration(Number(e.target.value))}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                            min="1"
+                            max="60"
+                          />
+                        </div>
+                        
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">
+                            휴식 시간 (분)
+                          </label>
+                          <input
+                            type="number"
+                            value={breakDuration}
+                            onChange={(e) => setBreakDuration(Number(e.target.value))}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                            min="1"
+                            max="30"
+                          />
+                        </div>
+                        
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">
+                            긴 휴식 시간 (분)
+                          </label>
+                          <input
+                            type="number"
+                            value={longBreakDuration}
+                            onChange={(e) => setLongBreakDuration(Number(e.target.value))}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                            min="1"
+                            max="60"
+                          />
+                        </div>
+                        
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">
+                            긴 휴식까지 뽀모도로 수
+                          </label>
+                          <input
+                            type="number"
+                            value={pomodorosUntilLongBreak}
+                            onChange={(e) => setPomodorosUntilLongBreak(Number(e.target.value))}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                            min="2"
+                            max="10"
+                          />
+                        </div>
+                      </div>
+                      
+                      <div className="flex gap-2 mt-6">
+                        <button
+                          onClick={() => setShowSettings(false)}
+                          className="flex-1 px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition"
+                        >
+                          취소
+                        </button>
+                        <button
+                          onClick={saveSettings}
+                          className="flex-1 px-4 py-2 bg-rose-500 text-white rounded-lg hover:bg-rose-600 transition"
+                        >
+                          저장
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {showNotionSettings && (
+                  <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+                    <div className="bg-white rounded-2xl p-6 max-w-sm w-full max-h-screen overflow-y-auto">
+                      <h2 className="text-2xl font-bold mb-4">노션 연동 설정</h2>
+                      
+                      <div className="space-y-4">
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">
+                            Notion Integration Token
+                          </label>
+                          <input
+                            type="password"
+                            value={notionToken}
+                            onChange={(e) => setNotionToken(e.target.value)}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                            placeholder="secret_..."
+                          />
+                        </div>
+                        
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">
+                            Page ID
+                          </label>
+                          <input
+                            type="text"
+                            value={notionPageId}
+                            onChange={(e) => setNotionPageId(e.target.value)}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                            placeholder="32자리 Page ID"
+                          />
+                        </div>
+                        
+                        <div className="text-xs text-gray-600 bg-blue-50 p-3 rounded-lg">
+                          <p className="font-semibold mb-2 text-blue-800">📝 설정 방법</p>
+                          <ol className="list-decimal list-inside space-y-2">
+                            <li><strong>Integration 만들기</strong>
+                              <ul className="list-disc list-inside ml-4 mt-1">
+                                <li><a href="https://www.notion.so/my-integrations" target="_blank" className="text-blue-600 underline">notion.so/my-integrations</a> 접속</li>
+                                <li>"New integration" 클릭</li>
+                                <li>이름 입력 후 생성</li>
+                                <li>"Internal Integration Token" 복사</li>
+                              </ul>
+                            </li>
+                            <li className="mt-2"><strong>페이지 연결</strong>
+                              <ul className="list-disc list-inside ml-4 mt-1">
+                                <li>데일리 메모 페이지 열기</li>
+                                <li>우측 상단 "..." → "Add connections"</li>
+                                <li>만든 Integration 선택</li>
+                              </ul>
+                            </li>
+                            <li className="mt-2"><strong>Page ID 복사</strong>
+                              <ul className="list-disc list-inside ml-4 mt-1">
+                                <li>페이지 URL: notion.so/<span className="bg-yellow-200">xxxxxxxx...</span></li>
+                                <li>마지막 32자리가 Page ID</li>
+                              </ul>
+                            </li>
+                          </ol>
+                        </div>
+
+                        <div className="text-xs text-gray-600 bg-green-50 p-3 rounded-lg">
+                          <p className="font-semibold mb-1 text-green-800">✨ 기록 형식</p>
+                          <p className="font-mono text-xs bg-white p-2 rounded mt-1">
+                            🍅 14:30 ~ 14:55 | 뽀모도로 1 완료<br/>
+                            🍅 15:05 ~ 15:30 | 뽀모도로 2 완료
+                          </p>
+                        </div>
+
+                        <div className="text-xs text-gray-600 bg-orange-50 p-3 rounded-lg">
+                          <p className="font-semibold mb-1 text-orange-800">🔒 노션 임베드 방법</p>
+                          <ol className="list-decimal list-inside space-y-1">
+                            <li>이 HTML 파일을 GitHub Pages나 웹서버에 업로드</li>
+                            <li>노션 페이지에서 "/embed" 입력</li>
+                            <li>업로드한 URL 입력</li>
+                          </ol>
+                        </div>
+                      </div>
+                      
+                      <div className="flex gap-2 mt-6">
+                        <button
+                          onClick={() => setShowNotionSettings(false)}
+                          className="flex-1 px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition"
+                        >
+                          취소
+                        </button>
+                        <button
+                          onClick={saveNotionSettings}
+                          className="flex-1 px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition"
+                        >
+                          저장
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        }
+        
+        ReactDOM.render(<PomodoroApp />, document.getElementById('root'));
+    </script>
+</body>
+</html>
